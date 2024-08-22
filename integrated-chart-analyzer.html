@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>圖表分析工具</title>
+    <script async src="https://docs.opencv.org/4.5.2/opencv.js" onload="onOpenCvReady();" onerror="onOpenCvError();"></script>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        input, button { margin: 10px 0; }
+        #imagePreview { max-width: 100%; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid black; padding: 5px; text-align: left; }
+        #status { color: red; }
+    </style>
+</head>
+<body>
+    <h1>圖表分析工具</h1>
+    <div id="status">正在加載OpenCV.js...</div>
+    
+    <input type="file" id="imageUpload" accept="image/*">
+    <br>
+    <img id="imagePreview" alt="預覽圖片">
+    
+    <h2>座標範圍</h2>
+    <label for="xMin">X軸最小值:</label>
+    <input type="number" id="xMin">
+    <label for="xMax">X軸最大值:</label>
+    <input type="number" id="xMax">
+    <br>
+    <label for="yMin">Y軸最小值:</label>
+    <input type="number" id="yMin">
+    <label for="yMax">Y軸最大值:</label>
+    <input type="number" id="yMax">
+    
+    <button id="analyzeBtn" disabled>分析圖表</button>
+    
+    <h2>分析結果</h2>
+    <table id="resultTable">
+        <thead>
+            <tr>
+                <th>X</th>
+                <th>Y</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- 結果將在這裡動態添加 -->
+        </tbody>
+    </table>
+
+    <script>
+    // 等待OpenCV.js加載完成
+    function onOpenCvReady() {
+        console.log('OpenCV.js is ready');
+        document.getElementById('status').style.color = 'green';
+        document.getElementById('status').textContent = 'OpenCV.js 已加載完成';
+        document.getElementById('analyzeBtn').disabled = false;
+    }
+
+    function onOpenCvError() {
+        console.log('Failed to load OpenCV.js');
+        document.getElementById('status').textContent = 'OpenCV.js 加載失敗，請檢查網絡連接並刷新頁面';
+    }
+
+    // 圖片上傳和預覽
+    const imageUpload = document.getElementById('imageUpload');
+    const imagePreview = document.getElementById('imagePreview');
+
+    imageUpload.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                imagePreview.src = event.target.result;
+            }
+            reader.readAsDataURL(file);
+        }
+    });
+
+    // 分析按鈕點擊事件
+    document.getElementById('analyzeBtn').addEventListener('click', analyzeChart);
+
+    function analyzeChart() {
+        if (typeof cv === 'undefined') {
+            alert('OpenCV.js 尚未加載完成，請稍後再試');
+            return;
+        }
+
+        const img = cv.imread(imagePreview);
+        const gray = new cv.Mat();
+        cv.cvtColor(img, gray, cv.COLOR_RGBA2GRAY);
+        
+        // 邊緣檢測
+        const edges = new cv.Mat();
+        cv.Canny(gray, edges, 50, 150, 3);
+
+        // 霍夫變換檢測直線 (軸)
+        const lines = new cv.Mat();
+        cv.HoughLines(edges, lines, 1, Math.PI / 180, 100);
+
+        // 找到水平和垂直線 (假設它們是x軸和y軸)
+        let xAxis, yAxis;
+        for (let i = 0; i < lines.rows; i++) {
+            const rho = lines.data32F[i * 2];
+            const theta = lines.data32F[i * 2 + 1];
+            if (Math.abs(theta) < 0.1 || Math.abs(theta - Math.PI) < 0.1) {
+                xAxis = {rho, theta};
+            } else if (Math.abs(theta - Math.PI / 2) < 0.1) {
+                yAxis = {rho, theta};
+            }
+        }
+
+        if (!xAxis || !yAxis) {
+            alert('無法檢測到x軸或y軸，請確保圖片中有清晰的坐標軸');
+            return;
+        }
+
+        // 檢測曲線 (使用輪廓檢測)
+        const contours = new cv.MatVector();
+        const hierarchy = new cv.Mat();
+        cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+        // 假設最長的輪廓是我們的曲線
+        let maxLen = 0;
+        let curveIndex = -1;
+        for (let i = 0; i < contours.size(); i++) {
+            const len = cv.arcLength(contours.get(i), false);
+            if (len > maxLen) {
+                maxLen = len;
+                curveIndex = i;
+            }
+        }
+
+        if (curveIndex === -1) {
+            alert('無法檢測到曲線，請確保圖片中有清晰的曲線');
+            return;
+        }
+
+        // 獲取曲線點
+        const curve = contours.get(curveIndex);
+        const curvePoints = [];
+        for (let i = 0; i < curve.data32S.length; i += 2) {
+            curvePoints.push({x: curve.data32S[i], y: curve.data32S[i + 1]});
+        }
+
+        // 獲取用戶輸入的座標範圍
+        const xMin = parseFloat(document.getElementById('xMin').value);
+        const xMax = parseFloat(document.getElementById('xMax').value);
+        const yMin = parseFloat(document.getElementById('yMin').value);
+        const yMax = parseFloat(document.getElementById('yMax').value);
+
+        if (isNaN(xMin) || isNaN(xMax) || isNaN(yMin) || isNaN(yMax)) {
+            alert('請輸入有效的座標範圍');
+            return;
+        }
+
+        // 將像素座標轉換為實際值
+        const results = curvePoints.map(point => {
+            const x = xMin + (point.x - xAxis.rho) / (img.cols - xAxis.rho) * (xMax - xMin);
+            const y = yMax - (point.y - yAxis.rho) / (img.rows - yAxis.rho) * (yMax - yMin);
+            return {x, y};
+        });
+
+        // 顯示結果
+        const tbody = document.querySelector('#resultTable tbody');
+        tbody.innerHTML = '';
+        results.forEach(point => {
+            const row = tbody.insertRow();
+            row.insertCell(0).textContent = point.x.toFixed(2);
+            row.insertCell(1).textContent = point.y.toFixed(2);
+        });
+
+        // 釋放OpenCV對象
+        img.delete(); gray.delete(); edges.delete(); lines.delete();
+        contours.delete(); hierarchy.delete();
+    }
+    </script>
+</body>
+</html>
